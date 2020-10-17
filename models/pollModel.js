@@ -35,17 +35,23 @@ const poleSchema = new mongoose.Schema({
       }
     ],
     validate: {
-      validator: function(user) {
-        return !this.voters.includes(user);
-      }
+      validator: function(users) {
+        return users.length === new Set(users).size;
+      },
+      message: 'this user already made a vote.'
     }
   },
-  email: {
+  creator: {
     type: String,
     required: true,
     validate: [validator.isEmail, 'please provide correct email.']
+  },
+  endsAt: {
+    type: Date
+    // max: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    // default: new Date(Date.now() + 2 * 60 * 60 * 1000),
+    // expires: Date.now() + 30 * 24 * 60 * 60 * 1000
   }
-  // createdAt: { type: Date, expires: '10s', default: Date.now }
 });
 
 const pollModel = mongoose.model('Polls', poleSchema);
