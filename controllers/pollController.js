@@ -1,9 +1,10 @@
 const Poll = require('./../models/pollModel');
 const jwt = require('jsonwebtoken');
 const { promisify } = require('util');
-const { stat } = require('fs');
 const nodemailer = require('nodemailer');
 const schedule = require('node-schedule');
+const AppError = require('./../utils/appError');
+const catchAsync = require('./../utils/catchAsync');
 
 const sendmail = mail => {
   var transport = nodemailer.createTransport({
@@ -19,26 +20,32 @@ const sendmail = mail => {
 };
 
 const endVote = (poll_id, endsAt) =>
-  schedule.scheduleJob(endsAt, async function() {
-    const poll = await Poll.findByIdAndDelete(poll_id);
-    let text = '<strong>Results:<strong><br><ul>';
-    poll.options.forEach(el => {
-      text += `<li>${el.option}: ${el.votes}</li>`;
-    });
-    text += '</ul><strong>Voters:<strong><br><ul>';
-    poll.voters.forEach(el => {
-      text += `<li>${el}</li>`;
-    });
-    text += '</ul>';
+  schedule.scheduleJob(
+    endsAt,
+    catchAsync(async function() {
+      const poll = await Poll.findByIdAndDelete(poll_id);
+      let text = '<strong>Results:<strong><br><ul>';
+      poll.options.forEach(el => {
+        text += `<li>${el.option}: ${el.votes}</li>`;
+      });
+      text += '</ul><strong>Voters:<strong><br><ul>';
+      poll.voters.forEach(el => {
+        text += `<li>${el}</li>`;
+      });
+      text += '</ul>';
 
-    const mail = {
-      to: poll.creator,
-      subject: `${poll.title} results!!`,
-      html: text
-    };
-    sendmail(mail);
-  });
-exports.createPoll = async (req, res, next) => {
+      const mail = {
+        to: poll.creator,
+        subject: `${poll.title} results!!`,
+        html: text
+      };
+      sendmail(mail);
+    })
+  );
+exports.createPoll = catchAsync(async (req, res, next) => {
+  if (!req.body.options)
+    return next(new AppError('please provide valid poll options.', 400));
+
   const options = req.body.options.map(option => {
     return { option };
   });
@@ -52,21 +59,33 @@ exports.createPoll = async (req, res, next) => {
       poll
     }
   });
-};
+});
 
-exports.getPoll = async (req, res, next) => {
+exports.getPoll = catchAsync(async (req, res, next) => {
   const poll = await await Poll.findById(req.params.id);
+
+  if (!poll) return next(new AppError('poll not found.', 404));
+
   res.status(200).json({
     status: 'success',
     data: {
       poll
     }
   });
-};
-exports.requestVote = async (req, res, next) => {
-  const poll = await Poll.findById(req.body.poll);
-  const option = poll.options.find(el => el._id == req.body.option);
+});
 
+exports.requestVote = catchAsync(async (req, res, next) => {
+  if (!req.body.email)
+    return next(new AppError('please provide your email.', 400));
+
+  const poll = await Poll.findById(req.params.id);
+  if (!poll) return next(new AppError('poll not found.', 404));
+
+  const option = poll.options.find(el => el._id == req.body.option);
+  if (!option)
+    return next(
+      new AppError('option not found, please provide a valid option id.', 404)
+    );
   const token = jwt.sign(
     {
       poll: poll._id,
@@ -88,16 +107,18 @@ exports.requestVote = async (req, res, next) => {
       message: 'please check your mail!'
     }
   });
-};
+});
 
-exports.commitVote = async (req, res, next) => {
+exports.commitVote = catchAsync(async (req, res, next) => {
   const decoded = await promisify(jwt.verify)(
     req.params.token,
     process.env.JWT_SECRET
   );
 
   const poll = await Poll.findById(decoded.poll);
+  if (!poll) return next(new AppError('This poll expired.', 404));
   const option = poll.options.find(el => el._id == decoded.option);
+  if (!option) return next(new AppError('This poll expired.', 400));
   option.votes++;
 
   poll.voters.push(decoded.email);
@@ -105,4 +126,4 @@ exports.commitVote = async (req, res, next) => {
   await poll.save();
 
   return res.status(200).send('VOTE DONE!');
-};
+});
